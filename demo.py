@@ -1,16 +1,20 @@
 import streamlit as st
 import os
 from llama_index.core import SimpleDirectoryReader, Settings, VectorStoreIndex, SummaryIndex
+from llama_index.core.chat_engine import ContextChatEngine
+from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.query_engine import RouterQueryEngine
+from llama_index.core.retrievers import RouterRetriever
 from llama_index.core.selectors import LLMSingleSelector
-from llama_index.core.tools import QueryEngineTool
+from llama_index.core.tools import RetrieverTool
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.embeddings.dashscope import DashScopeEmbedding
 from dotenv import load_dotenv
 import tempfile
 import shutil
 import re
+
+from llama_index.readers.file import PyMuPDFReader
 
 # Load environment variables
 load_dotenv()
@@ -55,8 +59,8 @@ def main():
         st.session_state.temp_dir = None
     if "current_pdf" not in st.session_state:
         st.session_state.current_pdf = None
-    if "query_engine" not in st.session_state:
-        st.session_state.query_engine = None
+    if "chat_engine" not in st.session_state:
+        st.session_state.chat_engine = None
 
     # 标题
     st.title("RAG Chat with LlamaIndex")
@@ -110,14 +114,18 @@ def main():
                         f.write(uploaded_file.getbuffer())
 
                     with st.spinner("正在加载 PDF..."):
-                        documents = SimpleDirectoryReader(st.session_state.temp_dir).load_data()
+                        file_extractor = {".pdf": PyMuPDFReader()}
+                        documents = SimpleDirectoryReader(
+                            st.session_state.temp_dir,
+                            file_extractor=file_extractor
+                        ).load_data()
+
                         st.session_state.docs_loaded = True
                         st.session_state.documents = documents
                         st.success("PDF 加载完成")
 
-                    if st.session_state.docs_loaded and st.session_state.query_engine is None:
+                    if st.session_state.docs_loaded and st.session_state.chat_engine is None:
                         with st.spinner("正在构建索引..."):
-                            # ── 这里是原来 run_rag_completion 里的索引构建部分 ──
                             llm = OpenAILike(
                                 model=selected_model,
                                 api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -125,6 +133,7 @@ def main():
                                 is_chat_model=True,
                                 temperature=0.7,
                                 max_tokens=2048,
+                                context_window=1000000,
                             )
                             embed_model = DashScopeEmbedding(
                                 model_name="text-embedding-v2"
@@ -138,28 +147,40 @@ def main():
                             summary_index = SummaryIndex(nodes)
                             vector_index = VectorStoreIndex(nodes)
 
-                            summary_query_engine = summary_index.as_query_engine(
-                                response_mode="tree_summarize",
-                                use_async=True,
-                            )
-                            summary_tool = QueryEngineTool.from_defaults(
-                                query_engine=summary_query_engine,
-                                description="Useful for summarization questions",
+                            summary_retriever = summary_index.as_retriever()
+                            vector_retriever = vector_index.as_retriever()
+
+                            summary_tool = RetrieverTool.from_defaults(
+                                retriever=summary_retriever,
+                                description="Useful for summarization questions and getting a high-level overview."
                             )
 
-                            vector_query_engine = vector_index.as_query_engine()
-                            vector_tool = QueryEngineTool.from_defaults(
-                                query_engine=vector_query_engine,
-                                description="Useful for retrieving specific context.",
+                            vector_tool = RetrieverTool.from_defaults(
+                                retriever=vector_retriever,
+                                description="Useful for retrieving specific context, details, quotes, or facts from the document."
                             )
 
-                            router_query_engine = RouterQueryEngine(
+                            router_retriever = RouterRetriever(
                                 selector=LLMSingleSelector.from_defaults(),
-                                query_engine_tools=[summary_tool, vector_tool],
+                                retriever_tools=[summary_tool, vector_tool],
                                 verbose=True
                             )
 
-                            st.session_state.query_engine = router_query_engine
+                            memory = ChatMemoryBuffer.from_defaults(
+                                token_limit=100000,
+                            )
+
+                            chat_engine = ContextChatEngine.from_defaults(
+                                retriever=router_retriever,
+                                memory=memory,
+                                system_prompt=(
+                                    "你是一个专业的PDF问答助手，要根据提供的文件内容进行回答，"
+                                    "不要编造内容，优先基于提供的PDF内容。"
+                                ),
+                                verbose=True
+                            )
+
+                            st.session_state.chat_engine = chat_engine
                         st.success("索引构建完成")
 
                 except Exception as e:
@@ -188,10 +209,20 @@ def main():
         with st.chat_message("assistant"):
             with st.spinner("正在思考..."):
                 try:
-                    response = st.session_state.query_engine.query(prompt)
-                    response_text = str(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
-                    display_assistant_message(response_text)
+                    message_placeholder = st.empty()  # 用于逐字更新
+                    full_response = ""
+
+                    stream_response = st.session_state.chat_engine.stream_chat(prompt)
+
+                    for token in stream_response.response_gen:
+                        full_response += token
+                        message_placeholder.markdown(full_response + "▌")  # 光标效果
+
+                    message_placeholder.markdown(full_response)
+
+                    # 保存完整回复
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+
                 except Exception as e:
                     st.error(f"生成失败：{str(e)}")
 
