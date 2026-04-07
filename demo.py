@@ -1,20 +1,12 @@
 import streamlit as st
 import os
-from llama_index.core import SimpleDirectoryReader, Settings, VectorStoreIndex, SummaryIndex
-from llama_index.core.chat_engine import ContextChatEngine
-from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.retrievers import RouterRetriever
-from llama_index.core.selectors import LLMSingleSelector
-from llama_index.core.tools import RetrieverTool
-from llama_index.llms.openai_like import OpenAILike
-from llama_index.embeddings.dashscope import DashScopeEmbedding
+from llama_index.core import SimpleDirectoryReader
 from dotenv import load_dotenv
 import tempfile
 import shutil
 import re
 
-from llama_index.readers.file import PyMuPDFReader
+from utils import get_chat_engine
 
 # Load environment variables
 load_dotenv()
@@ -78,7 +70,7 @@ def main():
     # 侧边栏 - 配置 & PDF 上传
     with st.sidebar:
         # 模型选择（目前只保留常用模型，可自行扩展）
-        model_options = ["qwen-plus", "qwen-max"]
+        model_options = ["Qwen Max", "Step 3.5 Flash", "GPT-oss 20B (OpenAI)"]
         selected_model = st.selectbox(
             "选择生成模型",
             model_options,
@@ -103,6 +95,10 @@ def main():
                         st.error("请在 .env 文件中设置 DASHSCOPE_API_KEY")
                         st.stop()
 
+                    if not os.getenv("OPENROUTER_API_KEY"):
+                        st.error("请在 .env 文件中设置 OPENROUTER_API_KEY")
+                        st.stop()
+
                     # 清理旧的临时目录
                     if st.session_state.temp_dir:
                         shutil.rmtree(st.session_state.temp_dir)
@@ -114,10 +110,10 @@ def main():
                         f.write(uploaded_file.getbuffer())
 
                     with st.spinner("正在加载 PDF..."):
-                        file_extractor = {".pdf": PyMuPDFReader()}
+                        # file_extractor = {".pdf": PyMuPDFReader()}
                         documents = SimpleDirectoryReader(
                             st.session_state.temp_dir,
-                            file_extractor=file_extractor
+                            # file_extractor=file_extractor
                         ).load_data()
 
                         st.session_state.docs_loaded = True
@@ -126,61 +122,7 @@ def main():
 
                     if st.session_state.docs_loaded and st.session_state.chat_engine is None:
                         with st.spinner("正在构建索引..."):
-                            llm = OpenAILike(
-                                model=selected_model,
-                                api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                                api_key=os.getenv("DASHSCOPE_API_KEY"),
-                                is_chat_model=True,
-                                temperature=0.7,
-                                max_tokens=2048,
-                                context_window=1000000,
-                            )
-                            embed_model = DashScopeEmbedding(
-                                model_name="text-embedding-v2"
-                            )
-                            Settings.llm = llm
-                            Settings.embed_model = embed_model
-
-                            splitter = SentenceSplitter(chunk_size=1024, chunk_overlap=100)
-                            nodes = splitter.get_nodes_from_documents(st.session_state.documents)
-
-                            summary_index = SummaryIndex(nodes)
-                            vector_index = VectorStoreIndex(nodes)
-
-                            summary_retriever = summary_index.as_retriever()
-                            vector_retriever = vector_index.as_retriever()
-
-                            summary_tool = RetrieverTool.from_defaults(
-                                retriever=summary_retriever,
-                                description="Useful for summarization questions and getting a high-level overview."
-                            )
-
-                            vector_tool = RetrieverTool.from_defaults(
-                                retriever=vector_retriever,
-                                description="Useful for retrieving specific context, details, quotes, or facts from the document."
-                            )
-
-                            router_retriever = RouterRetriever(
-                                selector=LLMSingleSelector.from_defaults(),
-                                retriever_tools=[summary_tool, vector_tool],
-                                verbose=True
-                            )
-
-                            memory = ChatMemoryBuffer.from_defaults(
-                                token_limit=100000,
-                            )
-
-                            chat_engine = ContextChatEngine.from_defaults(
-                                retriever=router_retriever,
-                                memory=memory,
-                                system_prompt=(
-                                    "你是一个专业的PDF问答助手，要根据提供的文件内容进行回答，"
-                                    "不要编造内容，优先基于提供的PDF内容。"
-                                ),
-                                verbose=True
-                            )
-
-                            st.session_state.chat_engine = chat_engine
+                            st.session_state.chat_engine = get_chat_engine(selected_model)
                         st.success("索引构建完成")
 
                 except Exception as e:
