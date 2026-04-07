@@ -1,18 +1,19 @@
 import os
+
+from dotenv import load_dotenv
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.llama_dataset import LabelledRagDataset
-from llama_index.embeddings.dashscope import DashScopeEmbedding
 from llama_index.llms.openai_like import OpenAILike
-from ragas.metrics import faithfulness, answer_relevancy, answer_correctness, context_recall
-from ragas.integrations.llama_index import evaluate
-from ragas.metrics.collections import context_precision
 from utils import get_chat_engine
+from llama_index.core.evaluation import FaithfulnessEvaluator, RelevancyEvaluator, BatchEvalRunner
+import pandas as pd
 
 dataset_path = "datasets/my_dataset.json"
 
-chat_engine = get_chat_engine("Step 3.5 Flash", docs=SimpleDirectoryReader('Files').load_data())
+load_dotenv()
 
-# 裁判 LLM (建议用强模型如 qwen-max 或 gpt-4o)
+chat_engine = get_chat_engine("Qwen Max", docs=SimpleDirectoryReader('Files').load_data())
+
 eval_llm = OpenAILike(
     model='qwen-max',
     api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -21,24 +22,34 @@ eval_llm = OpenAILike(
     temperature=0
 )
 
-embed_model = DashScopeEmbedding(model_name="text-embedding-v2")
+faith_evaluator = FaithfulnessEvaluator(llm=eval_llm)
+relev_evaluator = RelevancyEvaluator(llm=eval_llm)
 
-if os.path.exists(dataset_path):
-    rag_dataset = LabelledRagDataset.from_json(dataset_path)
-    print(f"成功读取数据集，包含 {len(rag_dataset.examples)} 条测试用例")
-else:
-    raise FileNotFoundError(f"未找到数据集文件: {dataset_path}，请先运行生成脚本。")
+rag_dataset = LabelledRagDataset.from_json(dataset_path)
+results_list = []
 
-test_df = rag_dataset.to_pandas()
+print("开始评估...")
+for example in rag_dataset.examples:
+    response = chat_engine.chat(example.query)
 
-result = evaluate(
-    query_engine=chat_engine,
-    metrics=[faithfulness, answer_relevancy, context_precision],
-    dataset=test_df,
-    llm=eval_llm,
-    embeddings=embed_model
-)
+    # 运行评估
+    faith_result = faith_evaluator.evaluate_response(response=response)
+    relev_result = relev_evaluator.evaluate_response(query=example.query, response=response)
 
-# --- 4. 结果展现 ---
-print("\n--- 评估结果 ---")
-print(result)
+    results_list.append({
+        "Question": example.query,
+        "Response": response.response,
+        "Faithfulness": faith_result.passing,  # True/False
+        "Relevancy": relev_result.passing,  # True/False
+        "Faith_Feedback": faith_result.feedback,
+        "Relev_Feedback": relev_result.feedback
+    })
+
+df = pd.DataFrame(results_list)
+faith_score = df["Faithfulness"].mean()
+relev_score = df["Relevancy"].mean()
+
+df.to_csv("eval/result.csv")
+
+print(f"\n评估完成！\n忠实度 (Faithfulness): {faith_score:.2%}")
+print(f"相关性 (Relevancy): {relev_score:.2%}")

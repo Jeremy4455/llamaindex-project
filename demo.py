@@ -122,7 +122,7 @@ def main():
 
                     if st.session_state.docs_loaded and st.session_state.chat_engine is None:
                         with st.spinner("正在构建索引..."):
-                            st.session_state.chat_engine = get_chat_engine(selected_model)
+                            st.session_state.chat_engine = get_chat_engine(selected_model, docs=st.session_state.documents)
                         st.success("索引构建完成")
 
                 except Exception as e:

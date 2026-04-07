@@ -1,6 +1,7 @@
 import os
 
 import streamlit as st
+from dotenv import load_dotenv
 from llama_index.core import Settings, SummaryIndex, VectorStoreIndex
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.core.memory import ChatMemoryBuffer
@@ -12,6 +13,7 @@ from llama_index.embeddings.dashscope import DashScopeEmbedding
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.llms.openrouter import OpenRouter
 from llama_index.postprocessor.dashscope_rerank import DashScopeRerank
+load_dotenv()
 
 ALL_MODELS = {
     # 阿里云 DashScope 模型
@@ -66,7 +68,7 @@ def get_llm(selected_label):
 
 
 def get_chat_engine(selected_model,
-                    docs=st.session_state.documents,
+                    docs=None,
                     chk_size=1024,
                     chk_overlap=150,
                     top_k=15,
