@@ -11,6 +11,7 @@ from llama_index.core.tools import RetrieverTool
 from llama_index.embeddings.dashscope import DashScopeEmbedding
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.llms.openrouter import OpenRouter
+from llama_index.postprocessor.dashscope_rerank import DashScopeRerank
 
 ALL_MODELS = {
     # 阿里云 DashScope 模型
@@ -64,7 +65,13 @@ def get_llm(selected_label):
     return None
 
 
-def get_chat_engine(selected_model):
+def get_chat_engine(selected_model,
+                    docs=st.session_state.documents,
+                    chk_size=1024,
+                    chk_overlap=150,
+                    top_k=15,
+                    top_n=5,
+                    m_size=131072):
 
     llm = get_llm(selected_model)
 
@@ -74,14 +81,14 @@ def get_chat_engine(selected_model):
     Settings.llm = llm
     Settings.embed_model = embed_model
 
-    splitter = SentenceSplitter(chunk_size=1024, chunk_overlap=150)
-    nodes = splitter.get_nodes_from_documents(st.session_state.documents)
+    splitter = SentenceSplitter(chunk_size=chk_size, chunk_overlap=chk_overlap)
+    nodes = splitter.get_nodes_from_documents(docs)
 
     summary_index = SummaryIndex(nodes)
     vector_index = VectorStoreIndex(nodes)
 
     summary_retriever = summary_index.as_retriever()
-    vector_retriever = vector_index.as_retriever(similarity_top_k=5)
+    vector_retriever = vector_index.as_retriever(similarity_top_k=top_k)
 
     summary_tool = RetrieverTool.from_defaults(
         retriever=summary_retriever,
@@ -100,7 +107,13 @@ def get_chat_engine(selected_model):
     )
 
     memory = ChatMemoryBuffer.from_defaults(
-        token_limit=131072,
+        token_limit=m_size,
+    )
+
+    # 添加阿里云的rerank重排模型来增加精确性
+    reranker = DashScopeRerank(
+        model="gte-rerank",
+        top_n=top_n
     )
 
     chat_engine = ContextChatEngine.from_defaults(
@@ -110,6 +123,7 @@ def get_chat_engine(selected_model):
             "你是一个专业的PDF问答助手，要根据提供的文件内容进行回答，"
             "不要编造内容，优先基于提供的PDF内容。"
         ),
+        node_postprocessors=[reranker],
         verbose=True
     )
 
