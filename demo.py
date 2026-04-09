@@ -6,7 +6,7 @@ import tempfile
 import shutil
 import re
 
-from utils import get_chat_engine
+from utils import get_chat_engine, ALL_MODELS
 
 # Load environment variables
 load_dotenv()
@@ -70,7 +70,7 @@ def main():
     # 侧边栏 - 配置 & PDF 上传
     with st.sidebar:
         # 模型选择（目前只保留常用模型，可自行扩展）
-        model_options = ["Qwen Max", "Step 3.5 Flash", "GPT-oss 20B (OpenAI)"]
+        model_options = ALL_MODELS.keys()
         selected_model = st.selectbox(
             "选择生成模型",
             model_options,
@@ -122,7 +122,9 @@ def main():
 
                     if st.session_state.docs_loaded and st.session_state.chat_engine is None:
                         with st.spinner("正在构建索引..."):
-                            st.session_state.chat_engine = get_chat_engine(selected_model, docs=st.session_state.documents)
+                            st.session_state.chat_engine = get_chat_engine(selected_model,
+                                                                           docs=st.session_state.documents,
+                                                                           m_size=ALL_MODELS[selected_model]['context_window']*0.5)
                         st.success("索引构建完成")
 
                 except Exception as e:

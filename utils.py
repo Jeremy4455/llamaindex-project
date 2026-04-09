@@ -23,14 +23,14 @@ ALL_MODELS = {
         "context_window": 1000000
     },
     # OpenRouter 模型
-    "Step 3.5 Flash": {
+    "Qwen3 8B": {
         "provider": "openrouter",
-        "model_id": "stepfun/step-3.5-flash:free",
-        "context_window": 256000
+        "model_id": "qwen/qwen3-8b",
+        "context_window": 40960
     },
-    "GPT-oss 20B (OpenAI)": {
+    "Llama 3.1 8B": {
         "provider": "openrouter",
-        "model_id": "openai/gpt-oss-20b:free",
+        "model_id": "meta-llama/llama-3.1-8b-instruct",
         "context_window": 131072
     }
 }
