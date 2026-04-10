@@ -1,13 +1,13 @@
 import os
 
-import streamlit as st
 from dotenv import load_dotenv
 from llama_index.core import Settings, SummaryIndex, VectorStoreIndex
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.node_parser import SentenceSplitter, SemanticSplitterNodeParser
 from llama_index.core.retrievers import RouterRetriever
 from llama_index.core.selectors import LLMSingleSelector
+from llama_index.core.selectors.llm_selectors import DEFAULT_SINGLE_SELECT_PROMPT_TMPL
 from llama_index.core.tools import RetrieverTool
 from llama_index.embeddings.dashscope import DashScopeEmbedding
 from llama_index.llms.openai_like import OpenAILike
@@ -23,15 +23,20 @@ ALL_MODELS = {
         "context_window": 1000000
     },
     # OpenRouter 模型
-    "Qwen3 8B": {
+    "Mistral Small 3": {
         "provider": "openrouter",
-        "model_id": "qwen/qwen3-8b",
-        "context_window": 40960
+        "model_id": "mistralai/mistral-small-24b-instruct-2501",
+        "context_window": 32768
     },
     "Llama 3.1 8B": {
         "provider": "openrouter",
         "model_id": "meta-llama/llama-3.1-8b-instruct",
         "context_window": 131072
+    },
+    "Qwen3.6 Plus": {
+        "provider": "openrouter",
+        "model_id": "qwen/qwen3.6-plus",
+        "context_window": 1000000
     }
 }
 
@@ -69,11 +74,14 @@ def get_llm(selected_label):
 
 def get_chat_engine(selected_model,
                     docs=None,
-                    chk_size=1024,
-                    chk_overlap=150,
                     top_k=15,
                     top_n=5,
-                    m_size=131072):
+                    m_size=40960,
+                    enable_reranker=True,
+                    enable_semantic_splitter=False,
+                    chk_size=1024,
+                    chk_overlap=150,
+                    verbose=True):
 
     llm = get_llm(selected_model)
 
@@ -83,7 +91,11 @@ def get_chat_engine(selected_model,
     Settings.llm = llm
     Settings.embed_model = embed_model
 
-    splitter = SentenceSplitter(chunk_size=chk_size, chunk_overlap=chk_overlap)
+    if enable_semantic_splitter:
+        splitter = SemanticSplitterNodeParser(buffer_size=1, breakpoint_percentile_threshold=95, embed_model=embed_model)
+    else:
+        splitter = SentenceSplitter(chunk_size=chk_size, chunk_overlap=chk_overlap)
+
     nodes = splitter.get_nodes_from_documents(docs)
 
     summary_index = SummaryIndex(nodes)
@@ -102,8 +114,11 @@ def get_chat_engine(selected_model,
         description="Useful for retrieving specific context, details, quotes, or facts from the document."
     )
 
+    # 在默认prompt后加入格式要求，确保输出稳定可解析
+    new_tmpl = DEFAULT_SINGLE_SELECT_PROMPT_TMPL + "\nCRITICAL: You must use double quotes for all JSON keys and string values. Do not use single quotes or unquoted keys."
+
     router_retriever = RouterRetriever(
-        selector=LLMSingleSelector.from_defaults(),
+        selector=LLMSingleSelector.from_defaults(prompt_template_str=new_tmpl),
         retriever_tools=[summary_tool, vector_tool],
         verbose=True
     )
@@ -113,10 +128,10 @@ def get_chat_engine(selected_model,
     )
 
     # 添加阿里云的rerank重排模型来增加精确性
-    reranker = DashScopeRerank(
-        model="gte-rerank",
-        top_n=top_n
-    )
+    post_processors = []
+    if enable_reranker:
+        reranker = DashScopeRerank(model="gte-rerank", top_n=top_n)
+        post_processors.append(reranker)
 
     chat_engine = ContextChatEngine.from_defaults(
         retriever=router_retriever,
@@ -125,8 +140,8 @@ def get_chat_engine(selected_model,
             "你是一个专业的PDF问答助手，要根据提供的文件内容进行回答，"
             "不要编造内容，优先基于提供的PDF内容。"
         ),
-        node_postprocessors=[reranker],
-        verbose=True
+        node_postprocessors=post_processors,
+        verbose=verbose
     )
 
     return chat_engine

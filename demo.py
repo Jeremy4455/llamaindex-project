@@ -67,7 +67,7 @@ def main():
         st.session_state.current_pdf = None
         st.rerun()
 
-    # 侧边栏 - 配置 & PDF 上传
+    # 侧边栏 - 配置 & 文件 上传
     with st.sidebar:
         # 模型选择（目前只保留常用模型，可自行扩展）
         model_options = ALL_MODELS.keys()
@@ -79,10 +79,10 @@ def main():
 
         st.divider()
 
-        st.subheader("上传 PDF")
+        st.subheader("上传文件")
         uploaded_file = st.file_uploader(
-            "选择 PDF 文件",
-            type="pdf",
+            "选择文件",
+            type=["pdf", "txt"],
             accept_multiple_files=False
         )
 
@@ -109,7 +109,7 @@ def main():
                     with open(file_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
-                    with st.spinner("正在加载 PDF..."):
+                    with st.spinner("正在加载文档..."):
                         # file_extractor = {".pdf": PyMuPDFReader()}
                         documents = SimpleDirectoryReader(
                             st.session_state.temp_dir,
@@ -118,13 +118,14 @@ def main():
 
                         st.session_state.docs_loaded = True
                         st.session_state.documents = documents
-                        st.success("PDF 加载完成")
+                        st.success("文档加载完成")
 
                     if st.session_state.docs_loaded and st.session_state.chat_engine is None:
                         with st.spinner("正在构建索引..."):
                             st.session_state.chat_engine = get_chat_engine(selected_model,
                                                                            docs=st.session_state.documents,
-                                                                           m_size=ALL_MODELS[selected_model]['context_window']*0.5)
+                                                                           m_size=ALL_MODELS[selected_model]['context_window']*0.5,
+                                                                           enable_semantic_splitter=False)
                         st.success("索引构建完成")
 
                 except Exception as e:
@@ -139,9 +140,9 @@ def main():
                 st.markdown(message["content"])
 
     # 用户输入框
-    if prompt := st.chat_input("请问关于这份 PDF 的任何问题..."):
+    if prompt := st.chat_input("请问关于这份文档的任何问题..."):
         if not st.session_state.docs_loaded:
-            st.error("请先上传 PDF 文件")
+            st.error("请先上传文档")
             st.stop()
 
         # 显示用户消息
