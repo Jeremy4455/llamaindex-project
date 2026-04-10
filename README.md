@@ -2,7 +2,7 @@
 
 基于 **LlamaIndex** + **Streamlit** 实现的 RAG（检索增强生成）应用。用户上传 PDF 文件后，可以用自然语言提问，系统根据文档内容给出准确、可靠的回答。
 
-支持 **阿里云通义千问（DashScope）** 和 **OpenRouter** 多种大语言模型，并内置评估数据集生成与 RAG 质量评测功能。
+支持 **阿里云通义千问（DashScope）** 和 **OpenRouter** 多种大语言模型，并内置 RAG 质量评测功能。
 
 ## 项目目标与价值
 
@@ -11,7 +11,7 @@
 - 通过路由机制（Router Retriever）让 LLM 自动判断使用哪种检索方式
 - 使用重排序（Reranker）提升检索结果的精确性
 - 支持流式输出 + 模型推理过程展示，提升用户体验
-- 内置数据集生成与评估管线，便于量化 RAG 效果
+- 内置评估管线，便于量化 RAG 效果
 - 适用场景：论文阅读、合同审查、技术手册查询、内部知识库问答等
 
 ## 技术栈一览
@@ -20,23 +20,22 @@
 |----------------|--------------------------------------|-----------------------------------|
 | 前端界面       | Streamlit                           | 快速构建交互式聊天界面            |
 | RAG 核心框架   | LlamaIndex                          | 文档加载、分块、索引、检索、对话引擎 |
-| 大模型         | 通义千问 (qwen-max)、OpenRouter (Step 3.5 Flash, GPT-oss 20B) | 文本生成、路由选择 |
+| 大模型         | 通义千问 (qwen-max)、OpenRouter (Mistral Small 3, Llama 3.1 8B, Qwen3.6 Plus) | 文本生成、路由选择 |
 | 向量嵌入       | DashScope text-embedding-v2         | 生成文本向量                      |
-| PDF 解析       | SimpleDirectoryReader               | 加载 PDF 文档                     |
+| PDF/TXT 解析   | SimpleDirectoryReader               | 加载 PDF/TXT 文档                 |
 | 索引类型       | VectorStoreIndex + SummaryIndex     | 向量检索 + 文档摘要检索           |
 | 检索路由       | RouterRetriever + LLMSingleSelector | 智能选择检索工具                  |
 | 重排序         | DashScopeRerank (gte-rerank)        | 对检索结果重排，提升 Top-N 精确性  |
 | 对话记忆       | ChatMemoryBuffer (可配置 token 上限) | 支持多轮上下文对话               |
-| 数据集生成     | RagDatasetGenerator                 | 从文档自动生成问答对用于评估      |
 | 评估指标       | FaithfulnessEvaluator + RelevancyEvaluator | 忠实度与相关性评测           |
 | 环境变量管理   | python-dotenv                       | 安全管理 API Key                  |
 
 ## 核心实现逻辑
 
 ### 1. 文档处理流程
-- 用户上传 PDF → 保存到临时目录
+- 用户上传 PDF/TXT → 保存到临时目录
 - 使用 SimpleDirectoryReader 解析文档
-- SentenceSplitter（块大小 1024，交叠 150）进行分块
+- SentenceSplitter（块大小 1024，交叠 150）或 SemanticSplitter 进行分块
 
 ### 2. 双索引设计
 - **VectorStoreIndex**：用于精确定位细节、引用、具体事实
@@ -72,9 +71,24 @@ LLM 根据问题自动判断：
 | 文件                  | 功能                                     |
 |-----------------------|------------------------------------------|
 | `demo.py`             | Streamlit 前端应用入口                   |
-| `utils.py`            | 核心工具函数：LLM 路由、索引构建、检索引擎配置 |
-| `dataset_generate.py` | 从 PDF 文档自动生成评估数据集（问答对）    |
-| `eval.py`             | 对生成的数据集进行评估，输出忠实度与相关性指标 |
+| `utils.py`            | 核心工具函数：LLM 配置、索引构建、路由检索引擎 |
+| `eval.py`             | 对数据集进行逐项评估，输出忠实度与相关性指标 |
+
+### 分块策略
+
+项目支持两种文本分块方式：
+- **SentenceSplitter**（默认）：按固定大小和交叠切分，适合大多数场景
+- **SemanticSplitterNodeParser**：基于嵌入相似度动态切分，在语义边界处断开分块，适合结构复杂的文档
+
+在 `utils.py` 的 `get_chat_engine()` 中通过 `enable_semantic_splitter` 参数切换。
+
+### 重排序开关
+
+重排序（Reranker）在聊天引擎中默认启用，可通过 `enable_reranker=False` 关闭。评估脚本 `eval.py` 中默认关闭以对比效果。
+
+### 路由 Prompt 优化
+
+为提升路由选择的稳定性，自定义了 `LLMSingleSelector` 的 prompt 模板，要求 LLM 输出标准 JSON 格式，确保双引号包裹键值对，避免解析失败。
 
 ## 如何运行
 
@@ -125,30 +139,15 @@ streamlit run demo.py
 
 ## 使用步骤
 
-1. 侧边栏选择模型（Qwen Max / Step 3.5 Flash / GPT-oss 20B）
-2. 上传一份 PDF 文件
+1. 侧边栏选择模型（Qwen Max / Mistral Small 3 / Llama 3.1 8B / Qwen3.6 Plus）
+2. 上传一份 PDF 或 TXT 文件
 3. 等待「PDF 加载完成」和「索引构建完成」
 4. 在下方输入框提问
 5. 可点击「清空对话」重置所有状态
 
-## 数据集生成与评估
+## 评估
 
-### 生成评估数据集
-
-将待评估的 PDF 文件放入 `Files/` 目录，然后运行：
-
-```bash
-python dataset_generate.py
-```
-
-脚本会：
-1. 加载 `Files/` 目录下的文档
-2. 使用 Qwen Max 为每个文本块生成 2 个问答对
-3. 保存为 `datasets/my_dataset.json`
-
-### 运行评估
-
-将 PDF 文件放入 `Files/` 目录，确保 `datasets/my_dataset.json` 已生成，然后运行：
+将数据集 JSON 和 PDF 文件准备好后，运行：
 
 ```bash
 python eval.py
@@ -158,7 +157,8 @@ python eval.py
 1. 加载评估数据集
 2. 使用 ChatEngine 逐一生成回答
 3. 分别评估 **忠实度（Faithfulness）** 和 **相关性（Relevancy）**
-4. 输出汇总结果到 `eval/result.csv`，包含每个问题的回答、各项指标的通过情况及模型反馈
+4. 输出汇总结果到 `eval/` 目录，文件名格式为 `{model_name}_result{0或1}.csv`，数字表示是否启用语义分块
+5. 终端打印评估报告摘要
 
 评估指标说明：
 - **忠实度（Faithfulness）**：回答是否基于检索到的上下文，是否存在幻觉/编造
@@ -166,8 +166,9 @@ python eval.py
 
 ## 当前限制 & 未来改进方向
 
-- 仅支持单份 PDF（可扩展为多文件/文件夹）
+- 仅支持单份文件（可扩展为多文件/文件夹）
 - 未显示引用来源/页码（可添加 Citation 后处理）
 - 未处理表格、图片内容（可引入 LlamaParse 或 Unstructured）
+- TXT 文件支持已添加，但分块策略对非结构化文本的效果可能不如 PDF
 - 可进一步加入 hybrid search 提升检索召回率
-- 评估数据集的生成质量依赖 LLM，可加入人工校验环节
+- 语义分块对长文档构建索引较慢，建议先用 SentenceSplitter 快速验证
